@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Administración de Reservas</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f7f7f7; }
+        .card { box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); }
+        .modal { backdrop-filter: blur(5px); }
+        .status-pill { padding: 0.25rem 0.75rem; border-radius: 9999px; font-weight: 600; font-size: 0.75rem; }
+    </style>
+    <!-- Librería jsPDF para la generación de PDFs -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body class="min-h-screen p-4">
+
+<!-- Modal de Bloqueo de Contraseña -->
+    <div id="login-modal" class="modal fixed inset-0 bg-gray-900 bg-opacity-75 z-50 flex items-center justify-center">
+        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm space-y-4">
+            <h2 class="text-2xl font-bold text-gray-800 text-center">Acceso de Administrador</h2>
+            <p class="text-gray-600 text-center">Ingresa la contraseña para continuar.</p>
+            <input type="password" id="password-input" placeholder="Contraseña" class="w-full border border-gray-300 rounded-md p-3 focus:ring-blue-500 focus:border-blue-500">
+            
+            <!-- CORREGIDO: Se quitó onclick y se agregó id="login-button" -->
+            <button id="login-button" class="w-full py-3 bg-blue-600 text-white font-semibold rounded-md shadow-lg hover:bg-blue-700 transition duration-150">
+                Iniciar Sesión
+            </button>
+            
+            <p id="login-error" class="text-red-600 text-sm mt-2 hidden text-center">Contraseña incorrecta.</p>
+        </div>
+    </div>
+    
+<!-- Contenido del Panel de Administración (Solo visible tras login) -->
+    <div id="admin-content" class="hidden max-w-7xl mx-auto py-8">
+        <header class="mb-8">
+            <div class="flex flex-col md:flex-row justify-between items-center">
+                <h1 class="text-4xl font-extrabold text-gray-900">Panel de Reservas</h1>
+                <div class="mt-4 md:mt-0 space-x-3">
+                    <button id="generate-pdf-btn" onclick="generatePDFReport()" class="py-2 px-4 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition duration-150 shadow-md disabled:bg-red-400">
+                        Generar Reporte PDF
+                    </button>
+                    
+                    <!-- CORREGIDO: Se quitó onclick y se agregó id="logout-button" -->
+                    <button id="logout-button" class="py-2 px-4 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600 transition duration-150 shadow-md">
+                        Cerrar Sesión
+                    </button>
+                </div>
+            </div>
+            <p class="mt-2 text-gray-600">Gestión en tiempo real. Contraseña: `admin123`</p>
+        </header>
+
+        <!-- Contenedor para la lista de reservas -->
+        <div id="reservations-list" class="space-y-4">
+            <p class="text-center text-gray-500" id="loading-status">Cargando reservas en tiempo real...</p>
+        </div>
+    </div>
+
+<!-- Firebase Imports y Lógica -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, doc, updateDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- TU CONFIGURACIÓN REAL DE FIREBASE ---
+        const firebaseConfig = {
+          apiKey: "AIzaSyDiOYuCjJoBEcuFMzt220W7CZtcjYeeSRM",
+          authDomain: "proyectoreservas-b3d94.firebaseapp.com",
+          databaseURL: "https://proyectoreservas-b3d94-default-rtdb.firebaseio.com",
+          projectId: "proyectoreservas-b3d94",
+          storageBucket: "proyectoreservas-b3d94.appspot.com",
+          messagingSenderId: "302922029441",
+          appId: "1:302922029441:web:f411f5c30f7a530a00f080",
+          measurementId: "G-NJQL4WWN79"
+        };
+        // -----------------------------------------------------
+
+        let db;
+        const RESERVATION_PASSWORD = 'admin123'; 
+        let currentReservations = []; 
+        
+        // --- IDs de Elementos ---
+        const loginModal = document.getElementById('login-modal');
+        const adminContent = document.getElementById('admin-content');
+        const loginError = document.getElementById('login-error');
+        const reservationsList = document.getElementById('reservations-list');
+        const loadingStatus = document.getElementById('loading-status');
+        const generatePdfBtn = document.getElementById('generate-pdf-btn');
+        const loginButton = document.getElementById('login-button');
+        const passwordInput = document.getElementById('password-input');
+        const logoutButton = document.getElementById('logout-button');
+
+        
+        const { jsPDF } = window.jspdf;
+
+        // --- Lógica de Seguridad Simple ---
+        function checkAccess() {
+            if (localStorage.getItem('admin_logged_in') === 'true') {
+                loginModal.classList.add('hidden');
+                adminContent.classList.remove('hidden');
+                return true;
+            } else {
+                loginModal.classList.remove('hidden');
+                adminContent.classList.add('hidden');
+                return false;
+            }
+        }
+        function login(password) {
+            if (password === RESERVATION_PASSWORD) {
+                localStorage.setItem('admin_logged_in', 'true');
+                window.location.reload(); 
+            } else {
+                loginError.classList.remove('hidden');
+            }
+        }
+        function logout() {
+            localStorage.removeItem('admin_logged_in');
+            window.location.reload();
+        }
+        
+        // --- Conexión de Botones ---
+        loginButton.addEventListener('click', () => {
+            login(passwordInput.value);
+        });
+        logoutButton.addEventListener('click', () => {
+            logout();
+        });
+
+
+        // --- ¡¡¡AQUÍ ESTÁ LA MODIFICACIÓN!!! ---
+        // La función ahora recibe el objeto 'res' completo
+        function generateWhatsAppLink(res) {
+            
+            // --- ¿CUÁLES SON LAS VARIABLES? ---
+            // Aquí están todas las variables que puedes usar en tu mensaje:
+            const nombre = res.name;
+            const fecha = res.date;    // Ej: "2025-10-20"
+            const hora = res.time;     // Ej: "17:00"
+            const personas = res.guests; // Ej: 4
+            const email = res.email;
+            // (res.phone se usa para el enlace, no para el texto)
+            
+            // --- ¿CÓMO LAS PONGO? ---
+            // Simplemente edita esta plantilla de texto.
+            // Usa ${variable} para insertar los datos.
+            
+            const message = `Hola ${nombre}, buen día :D . Me comunicó de restaurante coreano Seoullo kkbq Culiacán para confirmar una reserva el día ${fecha} a las ${hora} para ${personas} personas.
+
+Sería tan amable de confirmar su asistencia y número de personas.
+En caso de ignorar este mensaje será tomado como una cancelación. :)`;
+            
+            // ----------------------------------------
+
+            const cleanedPhone = res.phone.replace(/[-\s]/g, '');
+            const phoneWithPlus = cleanedPhone.startsWith('+52') ? cleanedPhone : `+${cleanedPhone}`;
+            
+            return `https://wa.me/${phoneWithPlus}?text=${encodeURIComponent(message)}`;
+        }
+
+
+        function getStatusClasses(status) {
+            // ... (sin cambios)
+            switch (status) {
+                case 'Confirmed': return 'bg-green-100 text-green-700';
+                case 'Canceled': return 'bg-red-100 text-red-700';
+                default: return 'bg-yellow-100 text-yellow-700';
+            }
+        }
+        
+        // --- Generación de PDF ---
+        generatePdfBtn.onclick = function() {
+            // ... (lógica sin cambios)
+            if (currentReservations.length === 0) {
+                alert("No hay reservas para generar el reporte.");
+                return;
+            }
+            generatePdfBtn.disabled = true;
+            generatePdfBtn.textContent = 'Generando...';
+            const confirmed = currentReservations.filter(res => res.status === 'Confirmed');
+            const canceled = currentReservations.filter(res => res.status === 'Canceled');
+            const doc = new jsPDF();
+            let y = 15;
+            doc.setFontSize(22);
+            doc.text("Reporte de Reservas Diarias", 105, y, null, null, "center");
+            y += 10;
+            doc.setFontSize(12);
+            doc.text(`Fecha del Reporte: ${new Date().toLocaleDateString('es-ES')}`, 10, y);
+            y += 10;
+            doc.setFontSize(16);
+            doc.setTextColor(25, 135, 84);
+            doc.text("Reservas Confirmadas", 10, y);
+            y += 8;
+            doc.setFontSize(10);
+            doc.setTextColor(0, 0, 0);
+            doc.text("Hora", 10, y); doc.text("Cliente", 35, y); doc.text("Personas", 100, y); doc.text("Teléfono", 125, y);
+            y += 5; doc.setLineWidth(0.5); doc.line(10, y, 200, y); y += 5;
+            confirmed.forEach(res => {
+                if (y > 280) { doc.addPage(); y = 15; /* ... */ }
+                doc.text(res.time, 10, y); doc.text(res.name, 35, y); doc.text(String(res.guests), 100, y); doc.text(res.phone, 125, y);
+                y += 7;
+            });
+            y += 10;
+            doc.setFontSize(16);
+            doc.setTextColor(220, 53, 69);
+            doc.text("Reservas Canceladas", 10, y);
+            y += 8;
+            doc.setFontSize(10);
+            doc.setTextColor(0, 0, 0);
+            doc.text("Hora", 10, y); doc.text("Cliente", 35, y); doc.text("Razón", 100, y);
+            y += 5; doc.setLineWidth(0.5); doc.line(10, y, 200, y); y += 5;
+            canceled.forEach(res => {
+                if (y > 280) { doc.addPage(); y = 15; /* ... */ }
+                doc.text(res.time, 10, y); doc.text(res.name, 35, y); doc.text('Cancelada por Admin/Cliente', 100, y);
+                y += 7;
+            });
+            doc.save(`Reporte_Reservas_${new Date().toISOString().slice(0, 10)}.pdf`);
+            generatePdfBtn.disabled = false;
+            generatePdfBtn.textContent = 'Generar Reporte PDF';
+        }
+
+        // --- INICIALIZACIÓN DE FIREBASE (REAL) ---
+        async function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                const auth = getAuth(app); 
+                await signInAnonymously(auth);
+                console.log("Firebase (admin.html) inicializado y autenticado.");
+            } catch (error) {
+                console.error("Error al inicializar Firebase:", error);
+                loadingStatus.textContent = `Error MUY GRAVE de conexión: ${error.message}.`;
+                db = null; 
+            }
+        }
+
+        // --- Lógica de Carga ---
+        
+        window.updateReservationStatus = async function(docId, newStatus) {
+            if (!db) return console.error("DB no inicializada.");
+            
+            try {
+                // Ruta corregida
+                const reservationRef = doc(db, 'reservations', docId);
+                await updateDoc(reservationRef, { status: newStatus });
+            } catch (error) {
+                console.error("Error al actualizar el estado:", error);
+                alert(`Error al actualizar el estado: ${error.message}`);
+            }
+        }
+
+        function renderReservations(reservations) {
+            currentReservations = reservations; 
+            if (reservations.length === 0) {
+                reservationsList.innerHTML = '<p class="text-center text-gray-500 text-lg">No hay reservas pendientes en la base de datos.</p>';
+                loadingStatus.classList.add('hidden');
+                return;
+            }
+
+            reservations.sort((a, b) => {
+                const dateA = new Date(`${a.date}T${a.time}:00`);
+                const dateB = new Date(`${b.date}T${b.time}:00`);
+                return dateA - dateB;
+            });
+
+            reservationsList.innerHTML = ''; 
+            reservations.forEach(res => {
+                const statusClasses = getStatusClasses(res.status);
+                const readableDate = new Date(`${res.date}T${res.time}`).toLocaleString('es-MX', { 
+                    weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                });
+
+                const reservationCard = document.createElement('div');
+                reservationCard.className = 'bg-white p-6 rounded-xl card flex flex-col md:flex-row justify-between items-start md:items-center space-y-4 md:space-y-0 border-l-4 border-blue-500';
+                
+                // --- ¡¡¡AQUÍ ESTÁ LA SEGUNDA MODIFICACIÓN!!! ---
+                // Le pasamos el objeto 'res' completo a la función
+                reservationCard.innerHTML = `
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center space-x-3 mb-1">
+                            <h3 class="text-xl font-semibold text-gray-800">${res.name}</h3>
+                            <span class="status-pill ${statusClasses}">${res.status}</span>
+                        </div>
+                        <p class="text-gray-600">👥 ${res.guests} personas | 🗓️ ${readableDate}</p>
+                        <p class="text-sm text-gray-500 truncate mt-1">📧 ${res.email} | 📱 ${res.phone}</p>
+                    </div>
+                    <div class="flex space-x-2 flex-wrap justify-end">
+                        <a href="${generateWhatsAppLink(res)}" target="_blank" class="py-2 px-3 bg-teal-500 text-white font-medium rounded-md hover:bg-teal-600 transition duration-150">
+                            Enviar Recordatorio (WA)
+                        </a>
+                        ${res.status !== 'Confirmed' ? 
+                            `<button onclick="window.updateReservationStatus('${res.id}', 'Confirmed')" class="py-2 px-3 bg-green-500 text-white font-medium rounded-md hover:bg-green-600 transition duration-150">
+                                Confirmar
+                            </button>` : ''
+                        }
+                        ${res.status !== 'Canceled' ? 
+                            `<button onclick="window.updateReservationStatus('${res.id}', 'Canceled')" class="py-2 px-3 bg-red-500 text-white font-medium rounded-md hover:bg-red-600 transition duration-150">
+                                Cancelar
+                            </button>` : ''
+                        }
+                    </div>
+                `;
+                reservationsList.appendChild(reservationCard);
+            });
+            loadingStatus.classList.add('hidden');
+        }
+
+        function loadReservations() {
+            if (!db) {
+                loadingStatus.textContent = "Conexión a base de datos fallida.";
+                return;
+            }
+
+            // Ruta corregida
+            const q = collection(db, 'reservations');
+            
+            onSnapshot(q, (snapshot) => {
+                const reservations = [];
+                snapshot.forEach(doc => {
+                    reservations.push({ id: doc.id, ...doc.data() });
+                });
+                renderReservations(reservations);
+            }, (error) => {
+                console.error("Error al escuchar reservas:", error);
+                loadingStatus.textContent = `Error al cargar datos: ${error.message}`;
+            });
+        }
+
+        // --- Inicialización General ---
+        window.onload = async () => {
+            if (checkAccess()) {
+                await initFirebase();
+                loadReservations(); 
+            }
+        };
+
+    </script>
+</body>
+</html>

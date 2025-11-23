@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reservas en Línea - Restaurante</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f7f7f7; }
+        .card { box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); }
+        .btn-primary { transition: all 0.2s; }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+        input:focus { border-color: #3b82f6; box-shadow: 0 0 0 1px #3b82f6; }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-lg bg-white card rounded-xl p-8 space-y-6">
+        <h1 class="text-3xl font-bold text-gray-800 text-center">¡Haz tu Reserva Ahora!</h1>
+        <p class="text-center text-gray-600">Completa el formulario para asegurar tu mesa.</p>
+
+        <!-- Mensajes de Éxito/Error -->
+        <div id="message-box" class="hidden p-4 rounded-lg text-sm transition duration-300"></div>
+
+        <form id="reservation-form" class="space-y-4">
+
+            <!-- Datos de Contacto -->
+            <div>
+                <label for="name" class="block text-sm font-medium text-gray-700">Nombre Completo</label>
+                <input type="text" id="name" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3" placeholder="Nombre y Apellido">
+            </div>
+            
+            <div>
+                <label for="email" class="block text-sm font-medium text-gray-700">Correo Electrónico</label>
+                <input type="email" id="email" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3" placeholder="ejemplo@correo.com">
+            </div>
+
+            <div>
+                <label for="phone" class="block text-sm font-medium text-gray-700">Número de Teléfono (WhatsApp)</label>
+                <input type="tel" id="phone" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3" placeholder="+521234567890 (Incluir código de país)">
+            </div>
+
+            <hr class="border-gray-200">
+
+            <!-- Datos de la Reserva -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="guests" class="block text-sm font-medium text-gray-700">Número de Personas (1-12)</label>
+                    <input type="number" id="guests" required min="1" max="12" value="2" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3">
+                </div>
+                
+                <div>
+                    <label for="date" class="block text-sm font-medium text-gray-700">Fecha</label>
+                    <input type="date" id="date" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3">
+                </div>
+            </div>
+
+            <div>
+                <label for="time" class="block text-sm font-medium text-gray-700">Hora (1:00 PM, 3:00 PM, 5:00 PM, 7:00 PM)</label>
+                <select id="time" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3 bg-white">
+                    <option value="">Selecciona una hora</option>
+                    <option value="13:00">1:00 PM</option>
+                    <option value="15:00">3:00 PM</option>
+                    <option value="17:00">5:00 PM</option>
+                    <option value="19:00">7:00 PM</option>
+                </select>
+            </div>
+
+            <button type="submit" id="submit-button" class="btn-primary w-full py-3 bg-blue-600 text-white font-semibold rounded-md shadow-lg hover:bg-blue-700 disabled:bg-blue-400">
+                Hacer Reserva
+            </button>
+        </form>
+
+        <!-- Enlace a la página de administración -->
+        <p class="text-center text-sm mt-4">
+            <a href="admin.html" class="text-blue-600 hover:text-blue-800 font-medium hover:underline transition duration-150">Acceso Administrador</a>
+        </p>
+    </div>
+
+<!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- TU CONFIGURACIÓN REAL DE FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyDiOYuCjJoBEcuFMzt220W7CZtcjYeeSRM",
+            authDomain: "proyectoreservas-b3d94.firebaseapp.com",
+            databaseURL: "https://proyectoreservas-b3d94-default-rtdb.firebaseio.com",
+            projectId: "proyectoreservas-b3d94",
+            storageBucket: "proyectoreservas-b3d94.appspot.com",
+            messagingSenderId: "302922029441",
+            appId: "1:302922029441:web:f411f5c30f7a530a00f080",
+            measurementId: "G-NJQL4WWN79"
+        };
+        // -----------------------------------------------------
+
+        let db;
+        let auth;
+        let userId;
+
+        const dateInput = document.getElementById('date');
+        const form = document.getElementById('reservation-form');
+        const messageBox = document.getElementById('message-box');
+        const submitButton = document.getElementById('submit-button');
+
+        // --- Utilidades ---
+        function showMessage(message, type = 'success') {
+            messageBox.textContent = message;
+            messageBox.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700');
+            if (type === 'error') {
+                messageBox.classList.add('bg-red-100', 'text-red-700');
+            } else {
+                messageBox.classList.add('bg-green-100', 'text-green-700');
+            }
+            messageBox.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function formatDate(date) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        function setupDateConstraints() {
+            const today = new Date();
+            const twoWeeksLater = new Date();
+            twoWeeksLater.setDate(today.getDate() + 14);
+            dateInput.min = formatDate(today);
+            dateInput.max = formatDate(twoWeeksLater);
+        }
+
+        // --- INICIALIZACIÓN DE FIREBASE (REAL) ---
+        async function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app); 
+                const userCredential = await signInAnonymously(auth);
+                userId = userCredential.user.uid;
+                console.log("Firebase (index.html) inicializado y autenticado.");
+            } catch (error) {
+                console.error("Error al inicializar Firebase:", error);
+                showMessage(`Error MUY GRAVE de conexión: ${error.message}.`, 'error');
+            }
+        }
+
+        // --- Manejo del Formulario (REAL) ---
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (!db || !userId) {
+                showMessage("Error: La base de datos no está conectada.", 'error');
+                return;
+            }
+            
+            submitButton.disabled = true;
+
+            const name = document.getElementById('name').value.trim();
+            const email = document.getElementById('email').value.trim();
+            const phone = document.getElementById('phone').value.trim();
+            const guests = parseInt(document.getElementById('guests').value, 10);
+            const date = document.getElementById('date').value;
+            const time = document.getElementById('time').value;
+
+            const reservationData = {
+                name, email, phone, guests, date, time,
+                createdAt: new Date().toISOString(),
+                status: 'Pending', 
+                creatorId: userId 
+            };
+
+            try {
+                // --- ¡¡¡AQUÍ ESTÁ LA CORRECCIÓN!!! ---
+                // Ruta simple, no la ruta 'artifacts'
+                const reservationsCollectionRef = collection(db, 'reservations');
+                // ------------------------------------
+
+                await addDoc(reservationsCollectionRef, reservationData);
+                showMessage(`✅ ¡Reserva realizada con éxito!`, 'success');
+                
+                form.reset(); 
+                setupDateConstraints();
+
+            } catch (error) {
+                console.error("Error al guardar la reserva:", error);
+                showMessage(`❌ Error al procesar la reserva: ${error.message}`, 'error');
+            } finally {
+                // Esto se ejecuta siempre (incluso si hay error)
+                submitButton.disabled = false;
+            }
+        });
+
+        // Inicializar
+        window.onload = () => {
+            setupDateConstraints();
+            initFirebase();
+        };
+
+    </script>
+</body>
+</html>
